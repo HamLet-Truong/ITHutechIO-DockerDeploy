@@ -1,0 +1,63 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v6.0.2
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4.0.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v6.0.0
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_REPOSITORY }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7.0.0
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Triển khai lên DevOps Classroom
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          REPO="${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_REPOSITORY }}"
+          CONTAINER_PORT=8080
+          RESPONSE=$(curl -sS -w "\n%{http_code}" -X POST "${{ secrets.DEPLOY_URL }}?repo=$REPO&tag=latest&slot=1&container_port=$CONTAINER_PORT")
+          BODY=$(echo "$RESPONSE" | sed "$d")
+          CODE=$(echo "$RESPONSE" | tail -n1)
+          echo "Webhook HTTP: $CODE"
+          if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
+            echo "Deploy thất bại. Xem chi tiết trong nhóm log bên dưới."
+            echo "::group::Chi tiết webhook JSON"
+            echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "Deploy thành công."
+          echo "::group::Chi tiết webhook JSON"
+          echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+          echo "::endgroup::"
